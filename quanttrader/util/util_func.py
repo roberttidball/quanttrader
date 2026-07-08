@@ -3,15 +3,21 @@
 import os
 import pickle
 from datetime import datetime
+import json
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 import pandas as pd
 
 __all__ = [
     "read_ohlcv_csv",
+    "read_fxmacrodata_ohlcv",
     "read_intraday_bar_pickle",
     "read_tick_data_txt",
     "save_one_run_results",
 ]
+
+FXMACRODATA_API_ROOT = "https://fxmacrodata.com/api/v1"
 
 
 def read_ohlcv_csv(
@@ -31,6 +37,63 @@ def read_ohlcv_csv(
 
     df = df[["Open", "High", "Low", "Close", "Volume"]]
     return df
+
+
+def _split_fx_pair(pair: str) -> tuple[str, str]:
+    pair = pair.upper().replace("/", "").replace("-", "").replace("_", "")
+    if len(pair) != 6:
+        raise ValueError("FX pair must be formatted like 'EURUSD' or 'EUR/USD'")
+    return pair[:3], pair[3:]
+
+
+def read_fxmacrodata_ohlcv(
+    pair: str,
+    start_date: str,
+    end_date: str,
+    api_key: str | None = None,
+    api_root: str = FXMACRODATA_API_ROOT,
+    tz: str = "UTC",
+) -> pd.DataFrame:
+    """Read FXMacroData daily FX reference rates as OHLCV bars.
+
+    FXMacroData publishes one official reference value per currency pair and
+    date. The value is mapped to Open, High, Low, and Close with zero Volume so
+    the result can be passed to BacktestEngine.add_data.
+    """
+    base, quote = _split_fx_pair(pair)
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "limit": 5000,
+    }
+    if api_key:
+        params["api_key"] = api_key
+
+    url = "{}/forex/{}/{}?{}".format(
+        api_root.rstrip("/"),
+        base,
+        quote,
+        urlencode(params),
+    )
+    with urlopen(url, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    records = []
+    for row in payload.get("data", []):
+        value = float(row["val"])
+        records.append((row["date"], value, value, value, value, 0.0))
+
+    df = pd.DataFrame.from_records(
+        records,
+        columns=["Date", "Open", "High", "Low", "Close", "Volume"],
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values("Date").set_index("Date")
+    df.index = df.index.tz_localize(tz)
+    return df[["Open", "High", "Low", "Close", "Volume"]]
 
 
 def read_intraday_bar_pickle(
