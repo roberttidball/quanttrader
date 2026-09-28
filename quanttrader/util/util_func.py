@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import json
 import os
 import pickle
 from datetime import datetime
-import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -18,6 +18,7 @@ __all__ = [
 ]
 
 FXMACRODATA_API_ROOT = "https://api.fxmacrodata.com/v1"
+FXMACRODATA_MAX_PAGES = 1000
 
 
 def read_ohlcv_csv(
@@ -61,26 +62,34 @@ def read_fxmacrodata_ohlcv(
     the result can be passed to BacktestEngine.add_data.
     """
     base, quote = _split_fx_pair(pair)
-    params = {
-        "start_date": start_date,
-        "end_date": end_date,
-        "limit": 5000,
-    }
     headers = {"X-API-Key": api_key} if api_key else {}
 
-    url = "{}/forex/{}/{}?{}".format(
-        api_root.rstrip("/"),
-        base,
-        quote,
-        urlencode(params),
-    )
-    with urlopen(Request(url, headers=headers), timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
+    # The API returns at most 100 rows per request, newest first, so page
+    # through the window with offset until pagination.has_more is false.
     records = []
-    for row in payload.get("data", []):
-        value = float(row["val"])
-        records.append((row["date"], value, value, value, value, 0.0))
+    offset = 0
+    for _ in range(FXMACRODATA_MAX_PAGES):
+        query = urlencode(
+            {
+                "start_date": start_date,
+                "end_date": end_date,
+                "limit": 100,
+                "offset": offset,
+            }
+        )
+        url = f"{api_root.rstrip('/')}/forex/{base}/{quote}?{query}"
+        with urlopen(Request(url, headers=headers), timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        rows = payload.get("data") or []
+        for row in rows:
+            value = float(row["val"])
+            records.append((row["date"], value, value, value, value, 0.0))
+
+        pagination = payload.get("pagination") or {}
+        if not rows or not pagination.get("has_more"):
+            break
+        offset = pagination.get("next_offset") or offset + len(rows)
 
     df = pd.DataFrame.from_records(
         records,
@@ -90,7 +99,7 @@ def read_fxmacrodata_ohlcv(
         return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
     df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values("Date").set_index("Date")
+    df = df.drop_duplicates("Date").sort_values("Date").set_index("Date")
     df.index = df.index.tz_localize(tz)
     return df[["Open", "High", "Low", "Close", "Volume"]]
 
