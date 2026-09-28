@@ -5,7 +5,7 @@ import pickle
 from datetime import datetime
 import json
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pandas as pd
 
@@ -17,7 +17,7 @@ __all__ = [
     "save_one_run_results",
 ]
 
-FXMACRODATA_API_ROOT = "https://fxmacrodata.com/api/v1"
+FXMACRODATA_API_ROOT = "https://api.fxmacrodata.com/v1"
 
 
 def read_ohlcv_csv(
@@ -66,8 +66,7 @@ def read_fxmacrodata_ohlcv(
         "end_date": end_date,
         "limit": 5000,
     }
-    if api_key:
-        params["api_key"] = api_key
+    headers = {"X-API-Key": api_key} if api_key else {}
 
     url = "{}/forex/{}/{}?{}".format(
         api_root.rstrip("/"),
@@ -75,7 +74,7 @@ def read_fxmacrodata_ohlcv(
         quote,
         urlencode(params),
     )
-    with urlopen(url, timeout=30) as response:
+    with urlopen(Request(url, headers=headers), timeout=30) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     records = []

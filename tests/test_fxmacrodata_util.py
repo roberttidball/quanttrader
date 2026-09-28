@@ -35,8 +35,9 @@ class TestFXMacroDataUtil(unittest.TestCase):
 
         calls = {}
 
-        def mock_urlopen(url, timeout):
-            calls["url"] = url
+        def mock_urlopen(request, timeout):
+            calls["url"] = request.full_url
+            calls["api_key"] = request.get_header("X-api-key")
             calls["timeout"] = timeout
             return MockResponse()
 
@@ -56,7 +57,8 @@ class TestFXMacroDataUtil(unittest.TestCase):
         parsed = urlparse(calls["url"])
         params = parse_qs(parsed.query)
         self.assertEqual(parsed.path, "/api/v1/forex/EUR/USD")
-        self.assertEqual(params["api_key"], ["test-key"])
+        self.assertNotIn("api_key", params)
+        self.assertEqual(calls["api_key"], "test-key")
         self.assertEqual(list(df["Close"]), [1.1, 1.2])
         self.assertEqual(list(df.columns), ["Open", "High", "Low", "Close", "Volume"])
 
