@@ -62,7 +62,9 @@ def read_fxmacrodata_ohlcv(
     the result can be passed to BacktestEngine.add_data.
     """
     base, quote = _split_fx_pair(pair)
-    headers = {"X-API-Key": api_key} if api_key else {}
+    api_key = (api_key or "").strip()
+    if any(char.isspace() or ord(char) < 32 for char in api_key):
+        raise ValueError("FXMacroData API key contains invalid characters")
 
     # The API returns at most 100 rows per request, newest first, so page
     # through the window with offset until pagination.has_more is false.
@@ -78,15 +80,25 @@ def read_fxmacrodata_ohlcv(
             }
         )
         url = f"{api_root.rstrip('/')}/forex/{base}/{quote}?{query}"
-        with urlopen(Request(url, headers=headers), timeout=30) as response:
+        request = Request(url)
+        if api_key:
+            # Unredirected headers are not copied to a redirect target.
+            request.add_unredirected_header("X-API-Key", api_key)
+        with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
-        rows = payload.get("data") or []
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("Unexpected FXMacroData response: no data list")
         for row in rows:
+            if not isinstance(row, dict) or "date" not in row or "val" not in row:
+                raise ValueError("Unexpected FXMacroData response row")
             value = float(row["val"])
             records.append((row["date"], value, value, value, value, 0.0))
 
-        pagination = payload.get("pagination") or {}
+        pagination = payload.get("pagination")
+        if not isinstance(pagination, dict):
+            pagination = {}
         if not rows or not pagination.get("has_more"):
             break
         offset = pagination.get("next_offset") or offset + len(rows)

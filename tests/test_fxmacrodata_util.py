@@ -115,6 +115,52 @@ class TestFXMacroDataUtil(unittest.TestCase):
         self.assertEqual(offsets, [0, 2])
         self.assertEqual(list(df["Close"]), [1.1, 1.2, 1.3, 1.4])
 
+    def _read_with_body(self, util_func, body, api_key="test-key"):
+        seen = {}
+
+        class MockResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode("utf-8")
+
+        def mock_urlopen(request, timeout):
+            seen["request"] = request
+            return MockResponse()
+
+        original_urlopen = util_func.urlopen
+        try:
+            util_func.urlopen = mock_urlopen
+            util_func.read_fxmacrodata_ohlcv(
+                "EURUSD", "2026-01-01", "2026-01-02", api_key=api_key
+            )
+        finally:
+            util_func.urlopen = original_urlopen
+        return seen
+
+    def test_read_fxmacrodata_ohlcv_key_not_forwarded_on_redirect(self):
+        util_func = _load_util_func_module()
+        seen = self._read_with_body(util_func, {"data": []})
+        request = seen["request"]
+        self.assertNotIn("X-api-key", request.headers)
+        self.assertEqual(request.unredirected_hdrs["X-api-key"], "test-key")
+
+    def test_read_fxmacrodata_ohlcv_rejects_malformed_key_without_echo(self):
+        util_func = _load_util_func_module()
+        with self.assertRaises(ValueError) as ctx:
+            self._read_with_body(util_func, {"data": []}, api_key="test-key\nX: y")
+        self.assertNotIn("test-key", str(ctx.exception))
+
+    def test_read_fxmacrodata_ohlcv_rejects_error_body(self):
+        util_func = _load_util_func_module()
+        for body in ({"detail": "Unknown pair"}, ["unexpected"], {"data": [{"date": "2026-01-01"}]}):
+            with self.assertRaises(ValueError):
+                self._read_with_body(util_func, body)
+
 
 if __name__ == "__main__":
     unittest.main()
